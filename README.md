@@ -1,2 +1,2 @@
 # NovaModCatalog
-Some Civ 5 mods, based on lekmod
+Some Civ5 mod/mappacks, based on lekmod (rehosted here with permission).
