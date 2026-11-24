@@ -1,0 +1,116 @@
+
+name: Build Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      folder:
+        description: Folder to release
+        required: true
+        type: choice
+        options:
+          - NovaMap
+          - NovaMod
+
+      version:
+        description: Version increment
+        required: true
+        type: choice
+        default: minor
+        options:
+          - minor
+          - major
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+          fetch-depth: 0
+
+      - name: Build and publish
+        env:
+          FOLDER: ${{ inputs.folder }}
+          LEVEL: ${{ inputs.version }}
+          BRANCH: ${{ github.ref_name }}
+          GH_TOKEN: ${{ github.token }}
+
+        run: |
+          set -euo pipefail
+
+          # Determine release name
+          if [[ "$BRANCH" == "main" ]]; then
+            NAME="$FOLDER"
+          else
+            SLUG=$(echo "$BRANCH" | sed 's/[^A-Za-z0-9._-]/-/g')
+            NAME="$FOLDER-$SLUG"
+          fi
+
+          TYPE="mod"
+          [[ "$FOLDER" == "NovaMap" ]] && TYPE="map"
+
+          PREFIX="$TYPE-$NAME-v"
+
+          # Find latest version for this branch and folder
+          git fetch --tags
+
+          LATEST=$(git tag --list "${PREFIX}*" |
+            sed "s/^${PREFIX}//" |
+            grep -E '^[0-9]+\.[0-9]+$' |
+            sort -V | tail -n 1 || true)
+
+          # Calculate next version
+          if [[ -z "$LATEST" ]]; then
+            VERSION="0.0"
+          else
+            MAJOR="${LATEST%.*}"
+            MINOR="${LATEST##*.}"
+
+            if [[ "$LEVEL" == "major" ]]; then
+              VERSION="$((MAJOR + 1)).0"
+            else
+              VERSION="$MAJOR.$((MINOR + 1))"
+            fi
+          fi
+
+          TAG="$PREFIX$VERSION"
+          ARCHIVE_NAME="${NAME}_v${VERSION}"
+          ZIP="$RUNNER_TEMP/${ARCHIVE_NAME}.zip"
+
+          echo "Publishing: $ARCHIVE_NAME"
+
+          # Validate source folder
+          if [[ ! -d "$FOLDER" ]]; then
+            echo "Folder not found: $FOLDER"
+            exit 1
+          fi
+
+          # Create ZIP with release-named top-level folder
+          mkdir -p "$RUNNER_TEMP/$ARCHIVE_NAME"
+          cp -a "$FOLDER/." "$RUNNER_TEMP/$ARCHIVE_NAME/"
+
+          (cd "$RUNNER_TEMP" && zip -qr "$ZIP" "$ARCHIVE_NAME")
+
+          # Publish GitHub Release
+          if [[ "$BRANCH" == "main" ]]; then
+            gh release create "$TAG" "$ZIP" \
+              --title "$ARCHIVE_NAME" \
+              --generate-notes \
+              --target "$GITHUB_SHA" \
+              --latest
+          else
+            gh release create "$TAG" "$ZIP" \
+              --title "$ARCHIVE_NAME" \
+              --generate-notes \
+              --target "$GITHUB_SHA" \
+              --prerelease \
+              --latest=false
+          fi
+
+          echo "Successfully published $ARCHIVE_NAME.zip"
